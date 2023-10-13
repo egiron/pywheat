@@ -1,0 +1,170 @@
+site_name: PyWheat
+site_description: Python library for simulation of wheat phenological development, crop growth and yield.
+site_author: egiron
+repo_url: https://github.com/egiron/pywheat
+repo_name: PyWheat
+edit_uri: edit/main/docs/
+
+nav:
+  - Home: 
+    - index.md
+    - 'Installation': installation.md
+    - 'Getting Started': 'getting_started.md'
+    - 'Data': 'data.md'
+    - 'User Guides': 
+      - 'Estimating Pheanology': 'notebooks/Getting Started.ipynb'
+    - 'FAQ': 'faq.md'
+    - 'Contributing': contributing.md
+    - 'API reference': 'reference/index.md'
+    - 'License': license.md
+    
+
+markdown_extensions:
+  - pymdownx.caret
+  - pymdownx.critic
+  - pymdownx.magiclink
+  - pymdownx.smartsymbols
+  - pymdownx.tilde
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.mark
+  - admonition
+  - footnotes
+  - attr_list
+  - pymdownx.arithmatex:
+      generic: true
+  - toc:
+      permalink: "#"
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.emoji:
+        emoji_index: !!python/name:materialx.emoji.twemoji 
+        emoji_generator: !!python/name:materialx.emoji.to_svg
+
+theme:
+  icon:
+    repo: fontawesome/brands/git-alt
+  name: material #readthedocs
+  logo: assets/logo_iwin2.png
+  favicon: assets/images/favicon.ico
+  # include_homepage_in_sidebar: false
+  highlightjs: true
+  hijs_languages:
+      - python
+  features: 
+    - navigation.instant
+    - header.autohide
+    # - navigation.tabs
+    # - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.expand
+    # - navigation.path
+    - navigation.indexes
+    - navigation.tracking
+    #- toc.integrate
+    - toc.follow
+    # - toc.autohide
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.annotation
+    - content.code.copy
+    - content.action.edit
+    - content.action.view
+  language: en
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to light mode
+  palette:
+    primary: brown
+    accent: yellow
+  font:
+    text: 'Roboto'
+    code: 'Roboto Mono'
+
+extra:
+  feature:
+    tabs: false
+  social:
+    - icon: fontawesome/brands/github-alt
+      link: https://github.com/egiron
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/egirongis
+    - icon: fontawesome/brands/linkedin
+      link: https://www.linkedin.com/in/ernesto-giron-808b6625/
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+  - javascripts/katex.js 
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.7/katex.min.js  
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.7/contrib/auto-render.min.js
+
+extra_css:
+  - css/layout.css
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.7/katex.min.css
+
+plugins:
+  - search:
+      lang: en
+  #  - social
+  - autorefs
+  - mkdocs-jupyter:
+      include_source: true
+      ignore_h1_titles: true
+      execute: false
+      allow_errors: true
+      ignore: ["conf.py"]
+      execute_ignore: ["*ignore.ipynb"]
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python-legacy:
+          paths: [../pywheat]  # search packages in the src folder
+          #import:
+          #  - https://docs.python-requests.org/en/master/objects.inv
+          options:
+            summary: true
+            members_order: source
+            #show_root_heading: true
+            show_object_full_path: false
+            #show_root_members_full_path: false
+            show_category_heading: false
+            show_symbol_type_toc: true
+            #show_if_no_docstring: false
+            #show_docstring_attributes: true
+            #show_docstring_functions: true
+            #show_docstring_classes: true
+            show_docstring_examples: true
+            show_docstring_parameters: true
+            show_docstring_other_parameters: true
+            show_docstring_raises: true
+            show_docstring_returns: true
+            show_docstring_warns: false
+            show_source: false
+            show_submodules: true
+            #show_docstring_modules: true
+            #show_docstring_description: false
+            docstring_style: google
+            docstring_section_style: table
+            docstring_options:
+              ignore_init_summary: true
+              trim_doctest_flags: false
+            merge_init_into_class: true
+
+copyright: 'Copyright &copy; 2023 <a href="https://github.com/egiron" target="_blank" rel="noopener">Ernesto Giron E.</a>'
+

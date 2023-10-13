@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# OSX 
+.DS_store
+
 # Distribution / packaging
 .Python
 build/
@@ -25,6 +28,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+testing_noUpload/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
