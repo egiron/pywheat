@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="https://egiron.github.io/iwin-tutorial/">
-    <img src="https://raw.githubusercontent.com/egiron/iwin-tutorial/master/docs/assets/logo_iwin2.png"  alt="IWIN tools library">
+  <a href="https://egiron.github.io/pywheat/">
+    <img src="https://raw.githubusercontent.com/egiron/pywheat/master/docs/assets/logo_iwin2.png"  alt="IWIN tools library">
   </a>
 </p>
 
@@ -11,16 +11,16 @@
     src="https://img.shields.io/badge/CIMMYT-IWIN-blue"
     alt="CIMMYT IWIN"
   /></a> -->
-  <a href="https://github.com/egiron/TemperatureFunct/actions"><img
-    src="https://github.com/egiron/TemperatureFunct/actions/workflows/ci.yaml/badge.svg"
+  <a href="https://github.com/egiron/pywheat/actions"><img
+    src="https://github.com/egiron/pywheat/actions/workflows/ci.yaml/badge.svg"
     alt="Build"
   /></a>
-  <a href="https://pypistats.org/packages/tfunct"><img
-    src="https://img.shields.io/pypi/dm/tfunct.svg" 
+  <a href="https://pypistats.org/packages/pywheat"><img
+    src="https://img.shields.io/pypi/dm/pywheat.svg" 
     alt="Downloads"
   /></a>
-  <a href="https://pypi.org/project/tfunct"><img 
-    src="https://img.shields.io/pypi/v/tfunct.svg" 
+  <a href="https://pypi.org/project/pywheat"><img 
+    src="https://img.shields.io/pypi/v/pywheat.svg" 
     alt="Python Package Index"
   /></a>
   <a href="https://opensource.org/licenses/"><img 

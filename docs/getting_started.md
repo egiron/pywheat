@@ -4,7 +4,7 @@ hide:
   #- toc
 --- -->
 <!-- <p align="center">
-  <a href="https://pypi.org/project/iwin"><img 
+  <a href="https://pypi.org/project/pywheat"><img 
     src="https://img.shields.io/pypi/v/pywheat.svg" 
     alt="Python Package Index"
   /></a>
