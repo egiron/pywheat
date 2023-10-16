@@ -26,6 +26,7 @@
 #******************************************************************************
 
 import sys
+import logging
 from pathlib import Path
 import pandas as pd
 import click
@@ -185,17 +186,22 @@ def pheno(latitude: float, longitude: float, sowing_date: str, tbase: float, tt_
                     elif(outputformat=='csv'):
                         df = pd.DataFrame(growstages).T
                         df.to_csv(output, index=False)
+                    logging.info('Phenological stages determined successfully')
                 except Exception as err:
+                    logging.info('Problem generating output file')
                     print("Problem generating output file")
                     
         except Exception as err:
+            logging.info('Problem determining phenological stages')
             print("Problem determining phenological stages", err)
             sys.exit()
     else:
+        logging.info('Weather data not found')
         click.echo("Weather data not found")
 
 
 if __name__ == "__main__":
+    logging.getLogger().setLevel(logging.INFO)
     click.echo(click.style('Welcome to PyWheat library', fg='green'))
     click.echo("{}".format(pw.__version__))
     click.echo()

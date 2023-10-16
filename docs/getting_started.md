@@ -153,6 +153,7 @@ params = dict(
 growstages = determine_phenology_stage(initparams=params, weather=data['Weather'], dispDates=True, dispFigPhenology=False, verbose=False)
 
 ```
+The output should look like something like this:
 
 ``` raw
 RSTG   GROWTH STAGE      DAP  DOY   CROP AGE   SUMDTT   DATE 

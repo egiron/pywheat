@@ -13,6 +13,7 @@ nav:
     - 'Data': 'data.md'
     - 'User Guides': 
       - 'Estimating Pheanology': 'notebooks/Getting Started.ipynb'
+      - 'Using ERA5 weather data': 'notebooks/Using_data_from_ERA5_and_GEE.ipynb'
     - 'FAQ': 'faq.md'
     - 'Contributing': contributing.md
     - 'API reference': 'reference/index.md'

@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="pywheat",
-    version="0.0.5",
+    version="0.0.6",
     license='GPLv3+',
     author="Ernesto Giron Echeverry",
     author_email="e.giron.e@gmail.com",

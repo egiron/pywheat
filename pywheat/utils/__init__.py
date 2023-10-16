@@ -47,6 +47,19 @@ from matplotlib.patches import Rectangle
 import seaborn as sns
 
 
+'''
+    Usage: Weather["date"] = Weather.apply(zfilldate, axis=1)
+
+'''
+def zfilldate(df):
+    y = str(df['Year'])
+    m = str(df["Month"])
+    d = str(df["Day"])
+    ymd =  y + m.zfill(2) + d.zfill(2)
+    ymd = dt.datetime.strptime(ymd, "%Y%m%d")
+    return ymd #.strftime('%Y-%m-%d')
+
+
 # Get Datetime for DATE columns
 def getFullDate(YrDOY):
     dtime = dt.datetime.strptime(YrDOY, '%y%j')
