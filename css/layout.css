@@ -1,0 +1,4 @@
+/* Override */
+.md-footer {
+    background-color: var(--md-primary-fg-color)
+}
