@@ -5,7 +5,7 @@ import warnings
 warnings.simplefilter('ignore')
 warnings.filterwarnings('ignore')
 
-__version__ = "PyWheat version 0.0.6"
+__version__ = "PyWheat version 0.0.9"
 __author__ = "Ernesto Giron Echeverry"
 __copyright__ = "Copyright (c) 2023"
 __license__ = "Public Domain"

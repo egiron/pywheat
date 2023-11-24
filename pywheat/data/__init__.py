@@ -36,6 +36,7 @@ warnings.filterwarnings('ignore')
 import os, sys
 import pandas as pd
 import datetime as dt
+from sklearn.neighbors import NearestNeighbors
 
 def load_dataset(name='kansas'):
     '''
@@ -66,3 +67,31 @@ def load_dataset(name='kansas'):
         "Weather":weather
     }
     return data
+
+# ---------------------------
+# Load configuration files
+# ---------------------------
+def load_configfiles():
+    file_path = os.path.realpath(__file__)
+    config_data_path = os.path.join(file_path.replace('__init__.py',''), 'config')
+    
+    configbycoords = None
+    configbygenotype = None
+    nn = None
+    configbycoords_path = os.path.join(config_data_path, 'configbycoords.cfg')
+    configbygenotype_path = os.path.join(config_data_path, 'configbygenotype.cfg')
+    if os.path.exists(config_data_path):
+        if os.path.isfile(configbycoords_path):
+            configbycoords = pd.read_parquet(configbycoords_path)
+            # Setup a model
+            nn = NearestNeighbors()#metric="haversine"
+            nn.fit(configbycoords[["lat", "lon", 'sowing_date']])
+        if os.path.isfile(configbygenotype_path):
+            configbygenotype = pd.read_parquet(configbygenotype_path)
+    
+    config = {
+        "nn": nn,
+        "configbycoords":configbycoords,
+        "configbygenotype": configbygenotype
+    }
+    return config

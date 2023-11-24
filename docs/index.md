@@ -34,7 +34,7 @@ Python library for simulation of wheat phenological development, crop growth and
 
 # Intro
 
-The PyWheat simulates the wheat growth and development in a daily time-step. Most of the algorithms are based on the original routines of the CERES-Wheat 2.0[^1]. PyWheat model has also much in common with the N-Wheat model. Improvements of both models carried out in DSSAT 4.7.5.11 [^2] and APSIM-Wheat 7.5 R3008[^3] are included gradually in this beta and future versions. 
+The PyWheat simulates the wheat growth and development in a daily time-step at field, local, regional and global scales. Most of the algorithms are based on the original Fortran routines of the CERES-Wheat 2.0[^1]. 
 
 To accurately simulate wheat growth, development, and yield, the model takes into account the following processes:
 
@@ -64,11 +64,112 @@ The package for estimating wheat grain yield using pywheat can be installed with
 pip install pywheat
 ```
 
-## Usage
+This will add a command-line interface (CLI) that you can then use like so:
+``` sh
+pywheat
+```
+This simple command shows the following message:
+``` sh
+Usage: pywheat [OPTIONS] COMMAND [ARGS]...
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  pheno
+  phenology
+
+```
+
+You can see two functions or commands you will be able to run. Use the help option (-h) to see how to proceed.
+
+``` sh
+pywheat phenology -h
+```
+
+```
+Usage: pywheat phenology [OPTIONS]
+
+Options:
+  -lat, --latitude FLOAT       Latitude of the site  [required]
+  -lon, --longitude FLOAT      Longitude of the site
+  -sd, --sowing_date TEXT      Sowing date of the crop. eg. 1972-03-13
+                               [required]
+  -tbase, --tbase FLOAT        Base temperature for estimate Thermal time.
+                               Default 0.0
+  -tt_topt, --tt_topt FLOAT    Thermal time optimum temperature. Default 26
+  -tt_tmax, --tt_tmax FLOAT    Thermal time maximum temperature. Default 34
+  -sa, --sunangle FLOAT        Sun angle with the horizon. eg. p = 6.0 : civil
+                               twilight. Default 0.0
+  -sn, --snow FLOAT            Snow fall. Default 0.0
+  -sdepth, --sdepth FLOAT      Sowing depth in cm. Default 3.0 cm
+  -gdde, --gdde FLOAT          Growing degree days per cm seed depth required
+                               for emergence, Default 6.2 GDD/cm.
+  -dsgft, --dsgft FLOAT        GDD from End Ear Growth to Start Grain Filling
+                               period. Default 200 degree-days
+  -vreq, --vreq FLOAT          Vernalization required for max.development rate
+                               (VDays). Default 505 degree-days
+  -phint, --phint FLOAT        Phyllochron. A good estimate for PHINT is 95
+                               degree days. This value for PHINT is
+                               appropriate except for spring sown wheat in
+                               latitudes greater than 30 degrees north and 30
+                               degrees south, in which cases a value for PHINT
+                               of 75 degree days is suggested. Default 95.0
+                               degree-days
+  -p1v, --p1v FLOAT            Development genetic coefficients,
+                               vernalization. 1 for spring type, 5 for winter
+                               type. Default 4.85
+  -p1d, --p1d FLOAT            Development genetic coefficients, Photoperiod
+                               (1 - 6, low- high sensitive to day length).
+                               Default 3.675
+  -p5, --p5 FLOAT              Grain filling degree days. Old value was
+                               divided by 10. Default 500 degree-days.
+  -p6, --p6 FLOAT              Approximate the thermal time from physiological
+                               maturity to harvest. Default 250.
+  -glim, --glim FLOAT          Threshold for days to germination. Default 40
+  -elim, --elim FLOAT          Threshold for thermal time to emergence.
+                               Default 300
+  -tdu, --tdu FLOAT            Threshold for thermal development units (TDU).
+                               Default 400
+  -fmt, --inputformat TEXT     File format of the input weather file. Options
+                               CSV, DSSAT .WTH or Parquet
+  -ofmt, --outputformat TEXT   File format of the output phenology file.
+                               Options txt or csv
+  -best, --bestmodel BOOLEAN   Use the calibration parameters to estimate
+                               phenology
+  -w, --weather FILE           Path to input weather file in CSV or Parquet
+                               format  [required]
+  -o, --output FILE            Path to output phenology file.
+  -verbose, --verbose BOOLEAN  Display comments
+  -h, --help                   Show this message and exit.
+```
+
+### Usage in CLI
+``` sh
+pywheat phenology -lat 37.18 -lon -99.75 -sd '1981-10-16' \
+ -w ./pywheat/data/example/KSAS.WTH -fmt wth -o ./outputs.txt -verbose False
+```
+!!! Note
+    The above instruction use 3 variables (_latitude, longitude and sowing date of the site_) to run the phenology model. It also requires the path of the weather data file in this case in DSSAT format. This will take a minute or so at the first time to compile the main functions and save them to the cache. Next time will be much faster.
+
+```
+RSTG   GROWTH STAGE      DAP  DOY   CROP AGE   SUMDTT   DATE 
+7      Sowing              0  289      0            0   1981-10-16
+8      Germinate           1  290      1           28   1981-10-17
+9      Emergence           5  294      5           66   1981-10-21
+1      Term Spklt         36  325     31         1683   1981-11-21
+2      End Veg           147   71    111          290   1982-03-12
+3      End Ear Gr        169   93     22          202   1982-04-03
+4      Beg Gr Fil        184  108     15          158   1982-04-18
+5      End Gr Fil        214  138     30          459   1982-05-18
+6      Harvest           228  152     14          267   1982-06-01
+```
+
+### Usage in a python session
 ```
 >>> import pywheat
 >>> print(pywheat.__version__)
-PyWheat version 0.0.5
+PyWheat version 0.0.9
 >>> from pywheat.data import load_dataset
 >>> # Load Kansas data
 >>> data = load_dataset()
@@ -94,15 +195,6 @@ from Kansas State University (Wagger,M.G. 1983) stored in DSSAT v4.8.
 >>> params = dict(
 ...     sowing_date = "1981-10-16", # Sowing date in YYYY-MM-DD
 ...     latitude = 39.0, # Latitude of the site
-...     #SDEPTH = 3.0, # Sowing depth in cm
-...     GDDE = 6.2, # Growing degree days per cm seed depth required for emergence, GDD/cm
-...     #DSGFT = 200, # GDD from End Ear Growth to Start Grain Filling period
-...     VREQ  = 505.0, # Vernalization required for max.development rate (VDays)
-...     PHINT = 95.0, # Phyllochron. A good estimate for PHINT is 95 degree days. This value for PHINT is appropriate except for spring sown wheat in latitudes greater than 30 degrees north and 30 degrees south, in which cases a value for PHINT of 75 degree days is suggested. 
-...     P1V = 4.85, # development genetic coefficients, vernalization. 1 for spring type, 5 for winter type
-...     P1D = 3.675, # development genetic coefficients, Photoperiod (1 - 6, low - high sensitive to day length)
-...     #P5 = 500, # grain filling degree days eg. 500 degree-days. Old value was divided by 10.
-...     #P6 = 250, # approximate the thermal time from physiological maturity to harvest
 ... )
 >>> from pywheat.pheno import determine_phenology_stage
 >>> import matplotlib.pylab as plt
@@ -110,15 +202,16 @@ from Kansas State University (Wagger,M.G. 1983) stored in DSSAT v4.8.
 ...                                        dispDates=True, dispFigPhenology=True, verbose=False)
 RSTG   GROWTH STAGE      DAP  DOY   CROP AGE   SUMDTT   DATE 
 7      Sowing              0  289      0            0   1981-10-16
-8      Germinate           1  290      1         16.1   1981-10-17
-9      Emergence           5  294      4         67.0   1981-10-21
-1      Term Spklt        185  109    180        402.2   1982-04-19
-2      End Veg           205  129     20        302.4   1982-05-09
-3      End Ear Gr        215  139     10        200.5   1982-05-19
-4      Beg Gr Fil        225  149     10        214.1   1982-05-29
-5      End Gr Fil        250  174     25        515.4   1982-06-23
-6      Harvest           260  184     10        259.0   1982-07-03
+8      Germinate           1  290      1           28   1981-10-17
+9      Emergence           5  294      5           66   1981-10-21
+1      Term Spklt         23  312     18          503   1981-11-08
+2      End Veg           122   46     99          286   1982-02-15
+3      End Ear Gr        153   77     31          192   1982-03-18
+4      Beg Gr Fil        173   97     20          156   1982-04-07
+5      End Gr Fil        207  131     34          468   1982-05-11
+6      Harvest           221  145     14          264   1982-05-25
 
+# Display a figure with the phenological stages 
 plt.show()
 ```
 
@@ -195,8 +288,8 @@ IN THE SOFTWARE.
 
 
   [^1]: CERES-Wheat version 2.0 by Dr. Joe T. Ritchie and Dr. Doug Godwin. https://nowlin.css.msu.edu/wheat_book/
-  [^2]: DSSAT. https://dssat.net/
-  [^3]: The Agricultural Production Systems sIMulator (APSIM). https://www.apsim.info/
+  <!-- [^2]: DSSAT. https://dssat.net/
+  [^3]: The Agricultural Production Systems sIMulator (APSIM). https://www.apsim.info/ -->
   [^4]: Ritchie, J.T.1991. Wheat phasic development. p. 31-54. In Hanks and Ritchie (ed.) Modeling plant and soil systems. Agron. Monogr. 31, ASA, CSSSA, SSSA, Madison, WI. 
   [^5]: Ritchie, J.T. and D.S. NeSmith. 1991. Temperature and Crop Development. p. 5-29. In Hanks and Ritchie (ed.) Modeling plant and soil systems. Agron. Monogr. 31, ASA, CSSSA, SSSA, Madison, WI. 
   

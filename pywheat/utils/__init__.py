@@ -37,7 +37,7 @@ import pathlib
 import datetime as dt
 import numpy as np
 import pandas as pd
-
+from tqdm import tqdm
 import matplotlib
 from matplotlib import pyplot as plt
 #import matplotlib.gridspec as gridspec
@@ -45,6 +45,18 @@ from matplotlib import pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 import seaborn as sns
+from joblib import Parallel, delayed
+from pathlib import Path
+from typing import Callable, Iterable, TypeVar
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+#import pyarrow.compute as pc
+
+#from ..pheno import estimate_emergence_by_bruteforce, estimate_heading_by_bruteforce
+#from ..pheno import estimate_anthesis_by_bruteforce, estimate_maturity_by_bruteforce
+#from ..pheno import determine_phenology_stages
+from .metrics import getScores
 
 
 '''
@@ -59,6 +71,31 @@ def zfilldate(df):
     ymd = dt.datetime.strptime(ymd, "%Y%m%d")
     return ymd #.strftime('%Y-%m-%d')
 
+def toInt(value):
+    try:
+        return int(value)
+    except Exception: #(ValueError, TypeError):
+        return np.nan    # leave unchanged
+    
+def getPhenologyDateAfterSowing(sowingdate, daysaftersowing):
+    try:
+        #return sowingdate + pd.DateOffset(days=int(daysaftersowing))
+        return (sowingdate + pd.DateOffset(days=int(daysaftersowing))).strftime('%Y-%m-%d')
+    except Exception: #(ValueError, TypeError):
+        return np.nan
+
+def getDOY(value):
+    try:
+        doy = int(value.strftime('%j'))
+        return doy
+    except Exception: #(ValueError, TypeError):
+        return np.nan    # leave unchanged
+    
+def getDAP(stagedate, sowing):
+    try:
+        return int((stagedate - sowing).days) #.dt.days
+    except Exception: #(ValueError, TypeError):
+        return np.nan    # leave unchanged
 
 # Get Datetime for DATE columns
 def getFullDate(YrDOY):
@@ -231,6 +268,88 @@ def readPlantGro(input_file=None, RUN_START=1, RUN_END=2):
         print("PlantGro.OUT file not found!")
 #
 
+# ---------------------------
+# Parquet file utils
+# ---------------------------
+"""coalesce_parquets.py
+    gist of how to coalesce small row groups into larger row groups.
+    Solves the problem described in https://issues.apache.org/jira/browse/PARQUET-1115
+"""
+def stream_to_parquet(path: Path, tables: Iterable[pa.Table]) -> None:
+    try:
+        first = next(tables)
+    except StopIteration:
+        return
+    schema = first.schema
+    with pq.ParquetWriter(path, schema) as writer:
+        writer.write_table(first)
+        for table in tables:
+            table = table.cast(schema)  # enforce schema
+            writer.write_table(table)
+
+
+def stream_from_parquet(path: Path) -> Iterable[pa.Table]:
+    reader = pq.ParquetFile(path)
+    for batch in reader.iter_batches():
+        yield pa.Table.from_batches([batch])
+
+
+def stream_from_parquets(paths: Iterable[Path]) -> Iterable[pa.Table]:
+    for path in paths:
+        yield from stream_from_parquet(path)
+
+
+"""Coalesce items into chunks. Tries to maximize chunk size and not exceed max_size.
+    If an item is larger than max_size, we will always exceed max_size, so make a
+    best effort and place it in its own chunk.
+    You can supply a custom sizer function to determine the size of an item.
+    Default is len.
+    >>> list(coalesce([1, 2, 11, 4, 4, 1, 2], 10, lambda x: x))
+    [[1, 2], [11], [4, 4, 1], [2]]
+"""
+T = TypeVar("T")
+def coalesce( items: Iterable[T], max_size: int, sizer: Callable[[T], int] = len ) -> Iterable[list[T]]:
+    batch = []
+    current_size = 0
+    for item in items:
+        this_size = sizer(item)
+        if current_size + this_size > max_size:
+            yield batch
+            batch = []
+            current_size = 0
+        batch.append(item)
+        current_size += this_size
+    if batch:
+        yield batch
+
+
+def coalesce_parquets(paths: Iterable[Path], outpath: Path, max_size: int = 2**20) -> None:
+    tables = stream_from_parquets(paths)
+    # Instead of coalescing using number of rows as your metric, you could
+    # use pa.Table.nbytes or something.
+    # table_groups = coalesce(tables, max_size, sizer=lambda t: t.nbytes)
+    table_groups = coalesce(tables, max_size)
+    coalesced_tables = (pa.concat_tables(group) for group in table_groups)
+    stream_to_parquet(outpath, coalesced_tables)
+
+def mergeParquetFiles(in_path, out_path, fname='merge', removeParts=False):
+    paths = Path(in_path).glob("*.parquet")
+    #print(list(paths))
+    if not os.path.isdir(out_path):
+        os.makedirs(out_path, exist_ok=True)
+    
+    coalesce_parquets(paths, outpath=os.path.join(out_path, "{}.parquet".format(fname)))
+    print(pq.ParquetFile(os.path.join(out_path, "{}.parquet".format(fname) )).metadata)
+    if (removeParts is True):
+        try:
+            shutil.rmtree(in_path)
+        except OSError as e:
+            print("Error: %s - %s." % (e.filename, e.strerror))
+
+# ------------------------------
+
+
+
 # --------------------------------------------------
 # Draw Phenology
 # --------------------------------------------------
@@ -239,6 +358,8 @@ def drawPhenology(gs=None, title='Phenological growth phases of Wheat', dpi=150,
                   topNameStageLabelOpt=True, copyrightLabel=True, saveFig=True, showFig=True, 
                   path_to_save_results='./', fname='Phenological_Phases_Wheat', fmt='jpg'):
     
+    if ('2.5' in gs):
+        del gs['2.5'] # remove anthesis row
     df = pd.DataFrame(gs).T
     # Setup parameters for x-axes
     labels = ','.join([str(x) for x in df['istage_old']]).split(',')
@@ -327,19 +448,19 @@ def drawPhenology(gs=None, title='Phenological growth phases of Wheat', dpi=150,
         # ------ Stage 8
         drawPlants(nstage=8, xpos=0.08+0.10, ypos=0.398-0.004, w=0.04, h=0.04)
         # ------ Stage 9
-        drawPlants(nstage=9, xpos=0.08+0.20, ypos=0.398-0.002, w=0.055, h=0.055)
+        drawPlants(nstage=9, xpos=0.08+0.195, ypos=0.398-0.002, w=0.055, h=0.055)
         # ------ Stage 1
-        drawPlants(nstage=1, xpos=0.08+0.26, ypos=0.398+0.001, w=0.15, h=0.15)
+        drawPlants(nstage=1, xpos=0.08+0.255, ypos=0.398+0.001, w=0.15, h=0.15)
         # ------ Stage 2
-        drawPlants(nstage=2, xpos=0.08+0.333, ypos=0.398, w=0.22, h=0.22)
+        drawPlants(nstage=2, xpos=0.08+0.325, ypos=0.398, w=0.22, h=0.22)
         # ------ Stage 3
-        drawPlants(nstage=3, xpos=0.08+0.406, ypos=0.398, w=0.28, h=0.28)
+        drawPlants(nstage=3, xpos=0.08+0.395, ypos=0.398, w=0.28, h=0.28)
         # ------ Stage 4
-        drawPlants(nstage=4, xpos=0.08+0.500, ypos=0.398, w=0.32, h=0.32)
+        drawPlants(nstage=4, xpos=0.08+0.485, ypos=0.398, w=0.32, h=0.32)
         # ------ Stage 5
-        drawPlants(nstage=5, xpos=0.08+0.592, ypos=0.398, w=0.35, h=0.35)
+        drawPlants(nstage=5, xpos=0.08+0.575, ypos=0.398, w=0.35, h=0.35)
         # ------ Stage 6
-        drawPlants(nstage=6, xpos=0.08+0.820, ypos=0.398, w=0.08, h=0.08)
+        drawPlants(nstage=6, xpos=0.08+0.805, ypos=0.398, w=0.08, h=0.08)
         # ---------------------------
         # Top Label of plants
         if (topDAPLabel):
@@ -353,7 +474,7 @@ def drawPhenology(gs=None, title='Phenological growth phases of Wheat', dpi=150,
             ax.text(0.47, 0.56, topLabel_DAP[4], transform=ax.transAxes, fontsize=fs, color=clr)
             ax.text(0.59, 0.66, topLabel_DAP[5], transform=ax.transAxes, fontsize=fs, color=clr)
             ax.text(0.72, 0.74, topLabel_DAP[6], transform=ax.transAxes, fontsize=fs, color=clr)
-            ax.text(0.92, 0.74, topLabel_DAP[7], transform=ax.transAxes, fontsize=fs, color=clr)
+            ax.text(0.90, 0.74, topLabel_DAP[7], transform=ax.transAxes, fontsize=fs, color=clr)
             ax.text(0.96, 0.16, topLabel_DAP[8], transform=ax.transAxes, fontsize=fs, color=clr)
     # ---------------------------
     if (timeSpanLabel):
@@ -390,7 +511,7 @@ def drawPhenology(gs=None, title='Phenological growth phases of Wheat', dpi=150,
         clr = 'brown'
         ypos=0.85
         ax.text(0.47, ypos, 'Heading', transform=ax.transAxes, fontsize=fs, color=clr, alpha=0.5)
-        ax.text(0.64, ypos, 'Anthesis', transform=ax.transAxes, fontsize=fs, color=clr, alpha=0.5)
+        ax.text(0.56, ypos, 'Anthesis', transform=ax.transAxes, fontsize=fs, color=clr, alpha=0.5)
         ax.text(0.84, ypos, 'Maturity', transform=ax.transAxes, fontsize=fs, color=clr, alpha=0.5)
 
     # Add vertical lines
@@ -526,7 +647,569 @@ def display_GDD(df, growstages):
     plt.show()
 
 
+# ------------------------------------
+#  Functions to process IWIN dataset
+# ------------------------------------
+def plot_results_v3(df_tmp=None, xy_lim=40, xylim=False, clr1='b',clr2='r', clr3='black',s=5,alpha=0.2,
+                                 e_threshold=10, h_threshold=15, a_threshold=10, m_threshold=10,
+                                 rmoutliers=False, dispScore=True, dispBads=False, fgsize=(8,14), 
+                                 title='Phenological stages of Wheat (IWIN)',
+                                 saveFig=True, showFig=True, path_to_save_results='./', dirname='Figures', 
+                                 fname='Fig_1_calibration_phenology_IWIN_locations', fmt='pdf'
+                                ):
 
+    def createFigure_v2(ax, data=None, code=(-1,1), stage='', v='DOY', fld1=None, fld2=None, 
+                     xy_lim=40, clr1='g', clr2='r', clr3='black', s=10, alpha=0.2, 
+                     dispScore=True, dispBads=False, xylim=True):
+        df = data.copy()
+        df.dropna(subset=[fld1,fld2], inplace=True)
+        df_ok = df[df['status']==code[1]]
+        df_outliers = df[df['status']==code[0]]
+        df_outliers2 = df[df['status']==-99]
+        ax.scatter(x=df_ok[fld1].to_numpy(), y=df_ok[fld2].to_numpy(), label=f'{stage} {v} (Wheat)', color=clr1, s=s, alpha=alpha )
+        ax.scatter(x=df_outliers[fld1].to_numpy(), y=df_outliers[fld2].to_numpy(), label='Outliers', color=clr2, s=s, alpha=alpha, zorder=-1 )
+        if (dispBads is True):
+            ax.scatter(x=df_outliers2[fld1].to_numpy(), y=df_outliers2[fld2].to_numpy(), label='Outliers 2', color=clr3, s=s, alpha=alpha )
+        ax.axline((0, 0), slope=1, color='#444', ls="-", linewidth=0.75, zorder=-2, label="line 1:1") #c=".5",
+        #if (xylim is True):
+        #    #maxlim = int(max(df[fld1].max(), df[fld2].max())) + xy_lim
+        #    #ax.set(xlim=(0, maxlim), ylim=(0, maxlim))
+        #    pass
+        ax.set_xlabel(f"Observed {stage} ({v})")
+        ax.set_ylabel(f"Simulated {stage} ({v})")
+        ax.grid(visible=True, which='major', color='#d3d3d3', linewidth=0.25)
+        ax.set_axisbelow(True)
+        if (dispScore==True):
+            try:
+                r2score0, mape0, rmse0, n_rmse0, d_index0, ef0, accuracy0 = getScores(df, fld1=fld1, fld2=fld2)
+                if (rmoutliers is True):
+                    r2score, mape, rmse, n_rmse, d_index, ef, accuracy = getScores(df_ok, fld1=fld1, fld2=fld2)
+                    ax.text(0.05,0.96,'Observations: {}\nRMSE: {:.1f} - [{:.1f}] days'.format(len(df), rmse0, rmse) + '\nNRMSE: {:.3f} - [{:.3f}]\nd-index: {:.2f} - [{:.2f}]\nR$^2$: {:.2f} - [{:.2f}]\nAccuracy: {:.2f}% - [{:.2f}%]'.format(n_rmse0, n_rmse, d_index0, d_index, 
+                                                                                                                                                                                                                                           r2score0, r2score, accuracy0, accuracy), 
+                             fontsize=8, ha='left', va='top', transform=ax.transAxes)
+                else:
+                    r2score, mape, rmse, n_rmse, d_index, ef, accuracy = getScores(df_ok, fld1=fld1, fld2=fld2)
+                    #ax.text(0.05,0.96,'Observations: {}\nOutliers: {}\nRMSE: {:.1f}'.format(len(df), (len(df_outliers) + len(df_outliers2)), rmse) + '\nn-RMSE: {:.3f}\nd-index: {:.2f}\nR$^2$: {:.2f}\nAccuracy: {:.2f}%'.format(n_rmse, d_index, r2score, accuracy), 
+                    #         fontsize=8, ha='left', va='top', transform=ax.transAxes)
+                    ax.text(0.05,0.96,'Observations: {}\nOutliers: {}\nRMSE: {:.1f} - [{:.1f}] days'.format(len(df), (len(df_outliers) + len(df_outliers2)), rmse0, rmse) + '\nNRMSE: {:.3f} - [{:.3f}]\nd-index: {:.2f} - [{:.2f}]\nR$^2$: {:.2f} - [{:.2f}]\nAccuracy: {:.2f}% - [{:.2f}%]'.format(n_rmse0, n_rmse, d_index0, d_index, 
+                                                                                                                                                                                                                                           r2score0, r2score, accuracy0, accuracy), 
+                             fontsize=8, ha='left', va='top', transform=ax.transAxes)
+            except Exception as err:
+                #print("Problem getting metrics")
+                pass
+
+    # Create figures
+    df = df_tmp.copy()
+    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6), (ax7, ax8)) = plt.subplots(4,2, figsize=fgsize)
+    fig.subplots_adjust(top=0.9)
+
+    # Mejorar la visualización de outliers
+    df_final = pd.DataFrame()
+    # Residuals
+    if (('ObsEmergDOY' in df.columns) or ('ObsEmergDAP' in df.columns) ):
+        # Figures 1
+        df_final = pd.concat([df_final, df[df['status']==1]], axis=0)
+        createFigure_v2(ax1, data=df, code=(-1,1), stage='Emergence', v='DOY', fld1="ObsEmergDOY", fld2="emerDOY", 
+                     xy_lim=40, clr1='brown', clr2='b', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+        # Figures 2
+        createFigure_v2(ax2, data=df, code=(-1,1), stage='Emergence', v='DAP', fld1="ObsEmergDAP", fld2="emerDAP", 
+                     xy_lim=40, clr1='brown', clr2='b', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+
+    if (('ObsHeadingDOY' in df.columns) or ('ObsHeadingDAP' in df.columns)):
+        # Figures 3 
+        df_final = pd.concat([df_final, df[df['status']==2]], axis=0)
+        createFigure_v2(ax3, data=df, code=(-2,2), stage='Heading', v='DOY', fld1="ObsHeadingDOY", fld2="headDOY", 
+                     xy_lim=40, clr1='g', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+        # Figures 4
+        createFigure_v2(ax4, data=df, code=(-2,2), stage='Heading', v='DAP', fld1="ObsHeadingDAP", fld2="headDAP", 
+                     xy_lim=40, clr1='g', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+
+    if (('ObsAnthesisDOY' in df.columns) or ('ObsAnthesisDAP' in df.columns)):
+        # Figures 5
+        df_final = pd.concat([df_final, df[df['status']==3]], axis=0)
+        createFigure_v2(ax5, data=df, code=(-3,3), stage='Anthesis', v='DOY', fld1="ObsAnthesisDOY", fld2="anthesisDOY", 
+                     xy_lim=40, clr1='purple', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+        # Figure 6
+        createFigure_v2(ax6, data=df, code=(-3,3), stage='Anthesis', v='DAP', fld1="ObsAnthesisDAP", fld2="anthesisDAP", 
+                     xy_lim=40, clr1='purple', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+
+    if (('ObsMaturityDOY' in df.columns) or ('ObsMaturityDAP' in df.columns)):
+        # Figures 7
+        df_final = pd.concat([df_final, df[df['status']==4]], axis=0)
+        createFigure_v2(ax7, data=df, code=(-4,4), stage='Maturity', v='DOY', fld1="ObsMaturityDOY", fld2="maturityDOY", 
+                     xy_lim=40, clr1='orange', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+        # Figures 8
+        createFigure_v2(ax8, data=df, code=(-4,4), stage='Maturity', v='DAP', fld1="ObsMaturityDAP", fld2="maturityDAP", 
+                     xy_lim=40, clr1='orange', s=s, alpha=alpha, dispScore=dispScore, dispBads=dispBads, xylim=True)
+
+    fig.suptitle(f'{title}', fontsize=18) #
+    fig.tight_layout()
+    # Save in PDF
+    hoy = dt.datetime.now().strftime('%Y%m%d')
+    figures_path = os.path.join(path_to_save_results, '{}_{}'.format(dirname, hoy))
+    if not os.path.isdir(figures_path):
+        os.makedirs(figures_path)
+    if (saveFig is True and fmt=='pdf'):
+        fig.savefig(os.path.join(figures_path,"{}_{}.{}".format(fname, hoy, fmt)), 
+                    bbox_inches='tight', orientation='portrait',  
+                    edgecolor='none', transparent=False, pad_inches=0.5, dpi=300)
+
+    if (saveFig==True and (fmt=='jpg' or fmt=='png')):
+        fig.savefig(os.path.join(figures_path,"{}_{}.{}".format(fname, hoy, fmt)), 
+                    bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none', transparent=False, dpi=300)
+
+    #if (showFig is True):
+    #    fig.show()
+    #else:
+    #    del fig
+    #    plt.close();
+    return fig, df_final
+
+
+def correctStatus(df_tmp, e_threshold=4, h_threshold=10, a_threshold=5, m_threshold=10):
+    ''' Add status '''
+    df = df_tmp.copy()
+    df['eresidualsDAP'] = df['ObsEmergDAP'] - df['emerDAP']
+    df['eresidualsDOY'] = df['ObsEmergDOY'] - df['emerDOY']
+    df['hresidualsDAP'] = df['ObsHeadingDAP'] - df['headDAP']
+    df['hresidualsDOY'] = df['ObsHeadingDOY'] - df['headDOY']
+    df['aresidualsDAP'] = df['ObsAnthesisDAP'] - df['anthesisDAP']
+    df['aresidualsDOY'] = df['ObsAnthesisDOY'] - df['anthesisDOY']
+    df['mresidualsDAP'] = df['ObsMaturityDAP'] - df['maturityDAP']
+    df['mresidualsDOY'] = df['ObsMaturityDOY'] - df['maturityDOY']
+
+    # for emergence 1 = good, -1 = bad
+    #e_threshold=10
+    #df['status'] = -1
+    df.loc[( ((df["eresidualsDAP"]>= -e_threshold) & (df["eresidualsDAP"]<=e_threshold)) ), 'status'] = 1
+    #df.loc[( ~((df["eresidualsDAP"]>= -e_threshold) & (df["eresidualsDAP"]<=e_threshold)) ), 'status'] = -1
+    # Outliers
+    df.loc[( (df['ObsEmergDOY']<150) & (df['emerDOY']>300) ), 'status'] = -99
+    df.loc[( (df['ObsEmergDOY']>200) & (df['emerDOY']<150) ), 'status'] = -99
+    df.loc[( (df['ObsEmergDAP']>80) & (df['emerDAP']>80) ), 'status'] = -1
+    # Bad records
+    df.loc[( (df['ObsEmergDAP']<=0) | (df['ObsEmergDAP']>50) ), 'status'] = -99
+    
+    # for heading 2 = good, -2 = bad
+    #h_threshold=10
+    #df['status'] = -2
+    df.loc[( ~(df["eresidualsDAP"]<0) 
+              & ((df["hresidualsDAP"] >= -h_threshold) & (df["hresidualsDAP"] <= h_threshold)) ), 'status'] = 2
+    #df.loc[~( ~(df["eresidualsDAP"]<0) 
+    #          & ((df["hresidualsDAP"] >= -h_threshold) & (df["hresidualsDAP"] <= h_threshold)) ), 'status'] = -2
+    df.loc[( (df['ObsHeadingDAP']>250) | (df['ObsHeadingDAP']<0) ), 'status'] = -2
+    df.loc[( (df['headDAP']>250) | (df['headDAP']<0) ), 'status'] = -2
+    # Bad records
+    df.loc[( (df['headDOY']>200) & (df['ObsHeadingDOY']<100) ), 'status'] = -99
+    df.loc[( (df['ObsHeadingDOY']>200) & (df['headDOY']<100) ), 'status'] = -99
+    df.loc[( (df['headDAP']>250) | (df['ObsHeadingDAP']>250) ), 'status'] = -99
+    
+    # for anthesis 3 = good, -3 = bad
+    #a_threshold=10
+    #df['status'] = -3
+    df.loc[( ((df["aresidualsDAP"]>= -a_threshold) & (df["aresidualsDAP"]<=a_threshold)) ), 'status'] = 3
+    #df.loc[( ~((df["aresidualsDAP"]>= -a_threshold) & (df["aresidualsDAP"]<=a_threshold)) ), 'status'] = -3
+    # Outliers
+    df.loc[( (df['anthesisDAP']>300) ), 'status'] = -3
+    # Bad records
+    df.loc[( (df['ObsAnthesisDAP']>300) | (df['ObsAnthesisDAP']<0) ), 'status'] = -99
+    
+    # for anthesis 4 = good, -4 = bad
+    #m_threshold=10
+    #df['status'] = -4
+    df.loc[( ((df["mresidualsDAP"]>= -m_threshold) & (df["mresidualsDAP"] <= m_threshold)) ), 'status'] = 4
+    #df.loc[( ~((df["mresidualsDAP"]>= -m_threshold) & (df["mresidualsDAP"] <= m_threshold)) ), 'status'] = -4
+    # Outliers
+    df.loc[( (df['maturityDAP']>350) ), 'status'] = -4
+    df.loc[( (df['ObsMaturityDOY']>300) & (df['maturityDOY']<100) ), 'status'] = -99
+    # Bad records
+    df.loc[( (df['ObsMaturityDAP']>350) | (df['ObsMaturityDAP']<0) ), 'status'] = -99
+    df.loc[( (df['maturityDAP']>350) | (df['maturityDAP']<0) ), 'status'] = -99
+    
+    print(df['status'].value_counts())
+
+    return df
+
+def correctStatus_v2(df_tmp, e_threshold=4, h_threshold=10, a_threshold=5, m_threshold=10):
+    ''' Add status '''
+    df = df_tmp.copy()
+    df['eresidualsDAP'] = df['ObsEmergDAP'] - df['emerDAP']
+    df['eresidualsDOY'] = df['ObsEmergDOY'] - df['emerDOY']
+    df['hresidualsDAP'] = df['ObsHeadingDAP'] - df['headDAP']
+    df['hresidualsDOY'] = df['ObsHeadingDOY'] - df['headDOY']
+    df['aresidualsDAP'] = df['ObsAnthesisDAP'] - df['anthesisDAP']
+    df['aresidualsDOY'] = df['ObsAnthesisDOY'] - df['anthesisDOY']
+    df['mresidualsDAP'] = df['ObsMaturityDAP'] - df['maturityDAP']
+    df['mresidualsDOY'] = df['ObsMaturityDOY'] - df['maturityDOY']
+
+    df_copy = df.copy()
+    # for emergence 1 = good, -1 = bad
+    df['status'] = -1
+    df.loc[( ((df["eresidualsDAP"]>= -e_threshold) & (df["eresidualsDAP"]<=e_threshold)) ), 'status'] = 1
+    #df.loc[( ~((df["eresidualsDAP"]>= -e_threshold) & (df["eresidualsDAP"]<=e_threshold)) ), 'status'] = -1
+    # Outliers
+    df.loc[( (df['ObsEmergDOY']<150) & (df['emerDOY']>300) ), 'status'] = -99
+    df.loc[( (df['ObsEmergDOY']>200) & (df['emerDOY']<150) ), 'status'] = -99
+    df.loc[( (df['ObsEmergDAP']>80) & (df['emerDAP']>80) ), 'status'] = -1
+    # Bad records
+    df.loc[( (df['ObsEmergDAP']<=0) | (df['ObsEmergDAP']>50) ), 'status'] = -99
+    # save 
+    df_e = df.copy()
+    
+    # for heading 2 = good, -2 = bad
+    df = df_copy.copy()
+    df['status'] = -2
+    df.loc[( ~(df["eresidualsDAP"]<0) 
+              & ((df["hresidualsDAP"] >= -h_threshold) & (df["hresidualsDAP"] <= h_threshold)) ), 'status'] = 2
+    #df.loc[~( ((df["hresidualsDAP"] >= -h_threshold) & (df["hresidualsDAP"] <= h_threshold)) ), 'status'] = -2
+    df.loc[( (df['ObsHeadingDAP']>250) | (df['ObsHeadingDAP']<0) ), 'status'] = -2
+    df.loc[( (df['headDAP']>250) | (df['headDAP']<0) ), 'status'] = -2
+    # Bad records
+    df.loc[( (df['headDOY']>200) & (df['ObsHeadingDOY']<100) ), 'status'] = -99
+    df.loc[( (df['ObsHeadingDOY']>200) & (df['headDOY']<100) ), 'status'] = -99
+    df.loc[( (df['headDAP']>250) | (df['ObsHeadingDAP']>250) ), 'status'] = -99
+    # save 
+    df_h = df.copy()
+    
+    # for anthesis 3 = good, -3 = bad
+    df = df_copy.copy()
+    df['status'] = -3
+    df.loc[( ((df["aresidualsDAP"]>= -a_threshold) & (df["aresidualsDAP"]<=a_threshold)) ), 'status'] = 3
+    #df.loc[~( ((df["aresidualsDAP"]>= -a_threshold) & (df["aresidualsDAP"]<=a_threshold)) ), 'status'] = -3
+    # Outliers
+    df.loc[( (df['anthesisDAP']>300) ), 'status'] = -99
+    # Bad records
+    df.loc[( (df['ObsAnthesisDAP']>300) | (df['ObsAnthesisDAP']<0) ), 'status'] = -99
+    # save 
+    df_a = df.copy()
+    
+    # for anthesis 4 = good, -4 = bad
+    df = df_copy.copy()
+    df['status'] = -4
+    df.loc[( ((df["mresidualsDAP"]>= -m_threshold) & (df["mresidualsDAP"] <= m_threshold)) ), 'status'] = 4
+    #df.loc[( ~((df["mresidualsDAP"]>= -m_threshold) & (df["mresidualsDAP"] <= m_threshold)) ), 'status'] = -4
+    # Outliers
+    df.loc[( (df['maturityDAP']>350) ), 'status'] = -4
+    # Bad records
+    df.loc[( (df['ObsMaturityDAP']>350) | (df['ObsMaturityDAP']<0) ), 'status'] = -99
+    df.loc[( (df['maturityDAP']>350) | (df['maturityDAP']<0) ), 'status'] = -99
+    # save 
+    df_m = df.copy()
+
+    df = pd.concat([df_e, df_h, df_a, df_m], axis=0, ignore_index=True)
+    
+    print(df['status'].value_counts())
+
+    return df
+
+
+
+def estimatePhenologicalStages_InParallel(fname='IWIN', sites_to_run=None, batch_size=1000, n_jobs=-2, 
+                                          useDefault=True, useBruteForce=False, e_threshold=10, h_threshold=15, a_threshold=10, 
+                                          m_threshold=10, rmoutliers=False, 
+                                          saveIntermediateFiles=False, saveFile=True, vb=False):
+    '''
+        Estimate phenological stages of wheat running simulations in Parallel
+        
+        Parameters:
+            sites_to_run (array): Array of Site objects
+
+        Returns: 
+            An array of sites with intermediate results
+
+    '''
+    if (sites_to_run is None):
+        print("Model parameters not valid")
+        return
+    hoy = dt.datetime.now().strftime('%Y%m%d')
+    nObs = len(sites_to_run)
+    step = np.ceil(nObs / batch_size)
+    if (vb is True):
+        print("Number of Obs:{} - in {:.0f} steps, using batch size: {}".format(nObs, step, batch_size))
+    df = None
+    # Run in parallel
+    for b in range(int(step)):
+        part = b + 1
+        batch_start= b * batch_size
+        batch_end = (b+1) * batch_size
+        if (vb is True):
+            print("Batch {} - from {} to {}".format(part, batch_start, batch_end))
+        processed_parcels_df = estimatePhenologicalStages_InBatch(fname=fname, sites_to_run=sites_to_run, 
+                                                                    batch_start=batch_start, batch_end=batch_end, n_jobs=n_jobs, 
+                                                                    useDefault=useDefault, useBruteForce=useBruteForce,
+                                                                    fmt="parquet", saveFile=saveIntermediateFiles, 
+                                                                    verbose=False)
+        df = pd.concat([df, processed_parcels_df])
+    
+    # update some features
+    try:
+        #df.drop(columns=['bruteforce', 'sowing_date', 'latitude', 'longitude'], inplace=True)
+        df['errors'] = df['errors'].astype(str)
+        df['sowing'] = pd.to_datetime(df['sowing'].astype(str), format='%Y-%m-%d')
+        df['emerDATE'] = pd.to_datetime(df['emerDATE'].astype(str), format='%Y-%m-%d')
+        df['headDATE'] = pd.to_datetime(df['headDATE'].astype(str), format='%Y-%m-%d')
+        df['anthesisDATE'] = pd.to_datetime(df['anthesisDATE'].astype(str), format='%Y-%m-%d')
+        df['maturityDATE'] = pd.to_datetime(df['maturityDATE'].astype(str), format='%Y-%m-%d')
+
+        # Outliers
+        df = correctStatus(df, e_threshold=e_threshold, h_threshold=h_threshold, 
+                           a_threshold=a_threshold, m_threshold=m_threshold)
+
+    except Exception as err:
+        print("Problem processing dataframe results.", err)
+    #
+    #
+    print("Phenology stages were estimated successfully!")
+    # Save all values
+    hoy = dt.datetime.now().strftime('%Y%m%d')
+    out_path = os.path.join( RESULT_PATH, f"{fname}_Pheno_parts_{hoy}")
+    if not os.path.isdir(out_path):
+        os.makedirs(out_path, exist_ok=True)
+    #if (saveIntermediateFiles is False):
+    #    mergedfname = f"{fname}_calibratedPhenology_merged_{hoy}.parquet"
+    #    res_path = RESULT_PATH + '../'
+    #    mergeParquetFiles(res_path, out_path, fname=mergedfname, removeParts=True)
+    
+    if (saveFile is True):
+        try:
+            df.to_parquet(os.path.join(out_path, f"{fname}_calibratedPhenology_{hoy}.parquet"), 
+                          index=False, compression=None)
+        except Exception as err:
+            print("Problem saving final results. Error:", err)
+    #
+    return df
+
+def estimatePhenologicalStages_InBatch(fname='IWIN', sites_to_run=None, batch_start=0, batch_end=1000, n_jobs=-2,
+                                       useDefault=True, useBruteForce=False, fmt="parquet", saveFile=True, verbose=False):
+    '''
+        Estimate phenological stages of wheat for each observation running model in Parallel
+
+        Parameters:
+            sites_to_run (array): Array of Site objects
+
+        Returns: 
+            An array of sites with intermediate results
+
+    '''
+    if (sites_to_run is None):
+        print("Model parameters not valid")
+        return
+    output = []
+    with Parallel(n_jobs=n_jobs, verbose=5) as parallel:
+        delayed_funcs = [delayed(lambda s: process_Phenology_Stages(s, useDefault, useBruteForce, verbose))(run) 
+                         for run in sites_to_run[batch_start:batch_end]]
+        output = parallel(delayed_funcs)
+    #print(output)
+    #df = pd.DataFrame(output)
+    processed_parcels_df = pd.DataFrame(output)
+    #processed_parcels_df.drop(columns=['errors'], inplace=True)
+    processed_parcels_df.reset_index(drop=True, inplace=True)
+    if (saveFile is True):
+        try:
+            # Save in binary format
+            hoy = dt.datetime.now().strftime('%Y%m%d')
+            out_path = os.path.join( RESULT_PATH, f"{fname}_Pheno_parts_{hoy}")
+            if not os.path.isdir(out_path):
+                os.makedirs(out_path, exist_ok=True)
+            if (fmt=="parquet"):
+                processed_parcels_df.to_parquet(os.path.join(out_path, f"{fname}_Pheno_{hoy}_part{batch_start}_{batch_end}.parquet"), 
+                                                index=False, compression=None)
+            elif (fmt=="csv"):
+                    processed_parcels_df.to_csv(os.path.join(out_path, f"{fname}_Pheno_{hoy}_part{batch_start}_{batch_end}.csv"),
+                                                index=False)
+        except Exception as err:
+            print("Problem saving intermediate files. Error:", err)
+    output = None
+    del output
+    _ = gc.collect()
+    return processed_parcels_df
+
+
+def process_Phenology_Stages(s, useDefault, useBruteForce, verbose):
+    global config
+    global Weather
+    
+    # Update params
+    def update_stiteParams(s, params):
+        obsEmerDAP = None
+        obsHeadDAP = None
+        obsAnthesisDAP = None
+        obsMaturityDAP = None
+        if ('ObsEmergDAP' in s[0]['attributes']):
+            try:
+                obsEmerDAP = int(s[0]['attributes']['ObsEmergDAP'])
+                # Not run bad observations
+                if ((obsEmerDAP < 0) or (obsEmerDAP > 100)):
+                    print("DAP not valid for Emergence")
+                    obsEmerDAP = None
+            except Exception as err:
+                obsEmerDAP = None
+        else:
+            obsEmerDAP = None
+
+        if ('ObsHeadingDAP' in s[0]['attributes']):
+            try:
+                obsHeadDAP = int(s[0]['attributes']['ObsHeadingDAP'])
+                if ((obsHeadDAP < 0) and (obsHeadDAP > 220)):
+                    print("DAP not valid for Heading")
+                    obsHeadDAP = None
+            except Exception as err:
+                obsHeadDAP = None
+        else:
+            obsHeadDAP = None
+
+        if ('ObsAnthesisDAP' in s[0]['attributes']):
+            try:
+                obsAnthesisDAP = int(s[0]['attributes']['ObsAnthesisDAP'])
+                if ((obsAnthesisDAP < 0) and (obsAnthesisDAP > 350)):
+                    print("DAP not valid for Anthesis")
+                    obsAnthesisDAP = None
+            except Exception as err:
+                obsAnthesisDAP = None
+        else:
+            obsAnthesisDAP = None
+
+        if ('ObsMaturityDAP' in s[0]['attributes']):
+            try:
+                obsMaturityDAP = int(s[0]['attributes']['ObsMaturityDAP'])
+                if ((obsMaturityDAP < 0) and (obsMaturityDAP > 350)):
+                    print("DAP not valid for Maturity")
+                    obsMaturityDAP = None
+            except Exception as err:
+                obsMaturityDAP = None
+        else:
+            obsMaturityDAP = None
+
+        #
+        # Update variables 
+        update_params = dict(
+            bruteforce = False,
+            brute_params = {
+                        "obsEmergenceDAP": obsEmerDAP, # Observed days after planting to emergence.
+                        "obsHeadingDAP": obsHeadDAP, # Observed days after planting to heading.
+                        "obsAnthesisDAP": obsAnthesisDAP, # Observed days after planting to Anthesis.
+                        "obsMaturityDAP": obsMaturityDAP, # Observed days after planting to Maturity.
+                        "max_tries": 500, # Number of maximum tries to find the best value
+                        "error_lim": 0.5, # Threshold to classify the observation as a good or bad
+                        "gdde_steps": 1.0, # Step to increase or reduce the GDDE parameters. Default 1.0
+                        "maxGDDE": 100, #Threshold for the maximum value of GDDE to reach emergence date
+                        "phint_steps": 1.0, # Step to increase or reduce the PHINT parameters. Default 1.0
+                        "maxPHINT": 150, #Threshold for the maximum value of PHINT to reach heading date
+                        "adap_steps": 1, #Step to increase or reduce the ADAH parameters. Default 1.0
+                        "maxADAP": 10, #Threshold for the maximum value of ADAH to reach anthesis date.
+                        "p5_steps": 1, #Step to increase or reduce the P5 parameters. Default 1.0
+                        "maxP5": 3000 #Threshold for the maximum value of P5 to reach anthesis date.
+                    },
+        )
+        params = {**params,**update_params}
+
+        return params
+
+    try:
+        status = 1
+        attrs = s['attributes']
+        loc = attrs['location']
+        country = attrs['country']
+        occ = attrs['Occ']
+        E = attrs['E']
+        G = attrs['G']
+        #month = attrs['month']
+        sowingdate = attrs['sowing']
+        lat = float(attrs['lat'])
+        lon = float(attrs['lon'])
+        genotype = attrs['genotype']
+        filter_weather_data = Weather[((Weather['location']==loc) & (Weather['DATE']>=sowingdate) )]
+        
+        # Initialization of variables 
+        params = dict(
+            weather = filter_weather_data,
+            sowing_date = sowingdate, # Sowing date in YYYY-MM-DD
+            latitude = lat, # Latitude of the site
+            longitude = lon, # Longitude of the site
+            genotype = genotype, # Name of the grand parent in IWIN pedigrees database #eg. LOCAL CHECK, FRANCOLIN #1
+            SNOW = attrs['SNOW'], #0, # Snow fall
+            SDEPTH = attrs['SDEPTH'], #3.0, # Sowing depth in cm
+            GDDE = attrs['GDDE'], #6.2, # Growing degree days per cm seed depth required for emergence, GDD/cm
+            DSGFT = attrs['DSGFT'], #200, # GDD from End Ear Growth to Start Grain Filling period
+            VREQ  = attrs['VREQ'], #505.0, # Vernalization required for max.development rate (VDays)
+            PHINT = attrs['PHINT'], #95.0, # Phyllochron. A good estimate for PHINT is 95 degree days. This value for PHINT is appropriate except for spring sown wheat in latitudes greater than 30 degrees north and 30 degrees south, in which cases a value for PHINT of 75 degree days is suggested. 
+            P1V = attrs['P1V'], #1.0, # development genetic coefficients, vernalization. 1 for spring type, 5 for winter type
+            P1D = attrs['P1D'], #3.675, # development genetic coefficients, Photoperiod (1 - 6, low- high sensitive to day length)
+            P5 = attrs['P5'], #500, # grain filling degree days eg. 500 degree-days. Old value was divided by 10.
+            P6 = attrs['P6'], #250, # approximate the thermal time from physiological maturity to harvest
+            DAYS_GERMIMATION_LIMIT = 40, # threshold for days to germination
+            TT_EMERGENCE_LIMIT = 800, # threshold for thermal time to emergence
+            TT_TDU_LIMIT = 400, # threshold for thermal development units (TDU),
+            ADAH = attrs['ADAH'], #6, # threshold for anthesis date after planting. This is a 6 days after heading.
+            bruteforce = False,
+            brute_params = {
+                        "obsEmergenceDAP": attrs['ObsEmergDAP'], # Observed days after planting to emergence.
+                        "obsHeadingDAP": attrs['ObsHeadingDAP'], # Observed days after planting to heading.
+                        "obsAnthesisDAP": attrs['ObsAnthesisDAP'], # Observed days after planting to Anthesis.
+                        "obsMaturityDAP": attrs['ObsMaturityDAP'], # Observed days after planting to Maturity.
+                        "max_tries": 500, # Number of maximum tries to find the best value
+                        "error_lim": 0.5, # Threshold to classify the observation as a good or bad
+                        "gdde_steps": 1.0, # Step to increase or reduce the GDDE parameters. Default 1.0
+                        "maxGDDE": 100, #Threshold for the maximum value of GDDE to reach emergence date
+                        "phint_steps": 1.0, # Step to increase or reduce the PHINT parameters. Default 1.0
+                        "maxPHINT": 150, #Threshold for the maximum value of PHINT to reach heading date
+                        "adap_steps": 1, #Step to increase or reduce the ADAH parameters. Default 1.0
+                        "maxADAP": 10, #Threshold for the maximum value of ADAH to reach anthesis date.
+                        "p5_steps": 1, #Step to increase or reduce the P5 parameters. Default 1.0
+                        "maxP5": 5000 #Threshold for the maximum value of P5 to reach anthesis date.
+                    }
+        )
+        
+        # Get Emergence by brute force
+        #growstages, params, status = estimate_emergence_by_bruteforce(params)
+        
+        # Get Heading by brute force
+        #growstages, params, status = estimate_heading_by_bruteforce(params)
+
+        # Get Anthesis by brute force
+        #growstages, params, status = estimate_anthesis_by_bruteforce(params)
+
+        # Get Maturity by brute force
+        #growstages, params, status = estimate_maturity_by_bruteforce_v2(params)
+
+        
+        growstages, params = determine_phenology_stages(config=config, initparams=params, useDefault=True, 
+                                                        dispDates=False, dispFigPhenology=False)
+        #
+        del params['weather'], params['brute_params']
+        if ((growstages is not None) and (growstages['2']['DOY']!='') and (growstages['2.5']['DOY']!='') ):
+            result = {**params,**{
+                                  'emerDATE':growstages['9']['date'], 
+                                  'emerDOY':growstages['9']['DOY'], 'emerDAP':growstages['9']['DAP'],
+                                  'emerAGE':growstages['9']['AGE'], 'emerSUMDTT':growstages['9']['SUMDTT'],
+                                  'headDATE':growstages['2']['date'],
+                                  'headDOY':growstages['2']['DOY'], 'headDAP':growstages['2']['DAP'],
+                                  'headAGE':growstages['2']['AGE'], 'headSUMDTT':growstages['2']['SUMDTT'],
+                                  'anthesisDATE':growstages['2.5']['date'],
+                                  'anthesisDOY':growstages['2.5']['DOY'], 'anthesisDAP':growstages['2.5']['DAP'],
+                                  'anthesisAGE':growstages['2.5']['AGE'], 'anthesisSUMDTT':growstages['2.5']['SUMDTT'],
+                                  'maturityDATE':growstages['5']['date'],
+                                  'maturityDOY':growstages['5']['DOY'], 'maturityDAP':growstages['5']['DAP'],
+                                  'maturityAGE':growstages['5']['AGE'], 'maturitySUMDTT':growstages['5']['SUMDTT'],
+                                  'QC_status':status
+                                 } }
+            #
+            s['attributes']['errors']=""
+            s['attributes'] = {**attrs,**result}
+    
+    except Exception as err:
+        print(f"Problem in observation GID: {s['attributes']['UID']}.",err)
+        s['attributes']['errors']=str(err) #{"UID":s['attributes']['UID'], "error":err}
+    
+    #
+    return s['attributes']
+    
+# ------------------------------------
+
+#
+# ------------------------------------
+#
+# ------------------------------------
 
 
 
