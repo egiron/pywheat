@@ -167,7 +167,7 @@ For detailed instructions of how-to get started, configuration options, and a de
 If you have any feedback, please reach out to us at [Feedback](mailto://e.giron.e@gmail.com)
 
 
-## FAQ
+## FAQ
 
 Please read out [frequently asked questions](faq.md) before you send an email.
 
