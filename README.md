@@ -5,7 +5,11 @@
 </p>
 
 <p align="center"><h1 align="center">Welcome to PyWheat</h1></p>
-
+<p align="center">
+  <!-- a href="https://doi.org/10.5281/zenodo.20291710"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20291711.svg" alt="DOI"></a -->
+  <a href="https://doi.org/10.5281/zenodo.20291710" target="blank"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20291711.svg" alt="DOI"></a>
+</p>
+  
 <p align="center">
   <!-- <a href="https://orderseed.cimmyt.org/iwin-results.php"><img
     src="https://img.shields.io/badge/CIMMYT-IWIN-blue"
